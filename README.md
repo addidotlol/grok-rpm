@@ -10,7 +10,7 @@ x86_64 and aarch64:
 
 ```bash
 sudo curl -L -o /etc/yum.repos.d/grok-bot.repo \
-  https://raw.githubusercontent.com/addidotlol/grok-rpm/main/repo/grok-bot.repo
+  https://github.com/addidotlol/grok-rpm/raw/refs/heads/main/repo/grok-bot.repo
 sudo dnf install -y grok-bot
 ```
 
@@ -81,4 +81,4 @@ go run ./cmd/grok-rpm check
 go run ./cmd/grok-rpm sync --once --arch amd64 --state-dir . --repo-dir ./repo
 ```
 
-`.github/workflows/sync.yml` runs `check` → per-arch `build` → `publish`: daily schedule plus manual dispatch (`version`, `arch`, `force`). Each arch builds on a native runner (`amd64` on `ubuntu-latest`, `arm64` on `ubuntu-24.04-arm`) because rpmbuild cannot cross-build. `publish` merges artifacts, regenerates repodata (`--keep 2`), commits `VERSION`/`BUILD_ID`/`repo/`, and cuts a `v<ver>` release. `repo/*.rpm` are Git LFS objects (contributors: `git lfs install && git lfs pull`); the `.repo` baseurl points at `raw.githubusercontent.com`, which resolves LFS — Pages would only serve pointers.
+`.github/workflows/sync.yml` runs `check` → per-arch `build` → `publish`: daily schedule plus manual dispatch (`version`, `arch`, `force`). Each arch builds on a native runner (`amd64` on `ubuntu-latest`, `arm64` on `ubuntu-24.04-arm`) because rpmbuild cannot cross-build. `publish` merges artifacts, regenerates repodata (`--keep 2`), commits `VERSION`/`BUILD_ID`/`repo/`, and cuts a `v<ver>` release. `repo/*.rpm` are Git LFS objects (contributors: `git lfs install && git lfs pull`); the `.repo` baseurl uses the `github.com/.../raw/...` form because only it resolves LFS to real binaries (`raw.githubusercontent.com` and Pages serve pointers).

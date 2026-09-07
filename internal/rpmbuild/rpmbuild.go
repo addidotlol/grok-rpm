@@ -330,9 +330,8 @@ func normalizeArch(a string) string {
 // (see the workflow matrix) avoids this entirely.
 func runRpmbuild(topdir, specPath, arch string) error {
 	// Pin xz payload compression: Ubuntu's rpm defaults to gzip payloads
-	// (~123MB for Grok Bot), Fedora's to xz (~95MB). GitHub rejects any
-	// git blob over 100MB, and LFS is not an option (Pages/dnf would serve
-	// pointers, not binaries), so xz-9 keeps the RPMs pushable.
+	// (~123MB for Grok Bot), Fedora's to xz (~87MB). Smaller RPMs mean
+	// less Git LFS storage/bandwidth per release.
 	base := []string{"-bb", "--define", "_topdir " + topdir, "--define", "_binary_payload w9.xzdio"}
 	run := func(args []string) error {
 		cmd := exec.Command("rpmbuild", args...)

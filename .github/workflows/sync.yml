@@ -164,11 +164,12 @@ jobs:
           path: ./repo
 
       - name: Regenerate repodata
-        # NOTE: baseurl points at raw.githubusercontent.com, not Pages:
-        # Pages serves LFS pointer files, raw resolves LFS to real binaries.
+        # NOTE: baseurl uses the github.com .../raw/... form, NOT
+        # raw.githubusercontent.com: only the former 302-redirects LFS
+        # objects to real binaries (raw serves the pointer file instead).
         run: |
           go run ./cmd/grok-rpm repo --rpmdir ./repo --keep 2 \
-            --baseurl "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/repo/"
+            --baseurl "https://github.com/${{ github.repository }}/raw/refs/heads/${{ github.ref_name }}/repo/"
           ls -lh repo/
           rpm -qpi repo/*.rpm | head -n 30 || true
           rpm -qpR repo/*.rpm | sort -u | head -n 40 || true

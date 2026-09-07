@@ -275,6 +275,12 @@ func Convert(o Options) (Result, error) {
 	if err := copyFile(src, dst); err != nil {
 		return res, err
 	}
+	// RPMs over GitHub's 100MB blob limit are stored via Git LFS (see
+	// .gitattributes); just flag pavement proximity so quota use is visible.
+	if st, err := os.Stat(dst); err == nil && st.Size() > 90_000_000 {
+		fmt.Fprintf(os.Stderr, "warning: %s is %.1f MB; ensure it is committed via Git LFS\n",
+			dst, float64(st.Size())/1e6)
+	}
 	res = Result{
 		RPMPath: dst, SpecPath: specPath,
 		Name: ctl.Package, Version: rpmVersion, Release: o.Release, Arch: arch,
@@ -323,7 +329,11 @@ func normalizeArch(a string) string {
 // first, then the short name. Building arm64 on a native aarch64 runner
 // (see the workflow matrix) avoids this entirely.
 func runRpmbuild(topdir, specPath, arch string) error {
-	base := []string{"-bb", "--define", "_topdir " + topdir}
+	// Pin xz payload compression: Ubuntu's rpm defaults to gzip payloads
+	// (~123MB for Grok Bot), Fedora's to xz (~95MB). GitHub rejects any
+	// git blob over 100MB, and LFS is not an option (Pages/dnf would serve
+	// pointers, not binaries), so xz-9 keeps the RPMs pushable.
+	base := []string{"-bb", "--define", "_topdir " + topdir, "--define", "_binary_payload w9.xzdio"}
 	run := func(args []string) error {
 		cmd := exec.Command("rpmbuild", args...)
 		cmd.Stdout = os.Stderr

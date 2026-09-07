@@ -1,6 +1,6 @@
 [grok-bot]
 name=grok-bot Grok Bot RPM repository
-baseurl=https://raw.githubusercontent.com/addidotlol/grok-rpm/main/repo/
+baseurl=https://github.com/addidotlol/grok-rpm/raw/refs/heads/main/repo/
 enabled=1
 gpgcheck=0
 skip_if_unavailable=True

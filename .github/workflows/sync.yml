@@ -1,0 +1,106 @@
+name: sync
+
+# Automatically picks up Grok Bot updates, converts the official .deb to
+# RPM (translating the Debian dependency list), rebuilds the dnf repository,
+# and publishes the result.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Pin version (e.g. 0.44.0). Empty = latest upstream."
+        required: false
+        default: ""
+      arch:
+        description: "Arch to build"
+        required: false
+        default: "all"
+        type: choice
+        options: ["all", "amd64", "arm64"]
+      force:
+        description: "Rebuild even if VERSION unchanged"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/sync.yml"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.23"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y rpm dpkg-dev
+
+      - name: Check upstream
+        id: check
+        run: |
+          go run ./cmd/grok-rpm check --format json | tee /tmp/upstream.json
+          echo "version=$(jq -r .version /tmp/upstream.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync (download + convert + repo)
+        run: |
+          ARGS=(sync --once --arch "${{ inputs.arch || 'all' }}" --state-dir . --repo-dir ./repo --workdir /tmp/grokwork --keep 2)
+          if [ -n "${{ inputs.version }}" ]; then ARGS+=(--version "${{ inputs.version }}"); fi
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS+=(--force); fi
+          # Base URL for the dnf .repo file (GitHub Pages serves ./repo).
+          # Adjust <owner>/<repo> via repository variables if you fork.
+          ARGS+=(--baseurl "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/repo/")
+          go run ./cmd/grok-rpm "${ARGS[@]}"
+
+      - name: Verify repo
+        run: |
+          ls -lh repo/
+          rpm -qpi repo/*.rpm | head -n 30 || true
+          rpm -qpR repo/*.rpm | sort -u | head -n 40 || true
+          test -f repo/repodata/repomd.xml
+
+      - name: Commit repo + state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION BUILD_ID repo/ || true
+          if git diff --cached --quiet; then
+            echo "No changes (already up to date)."
+            exit 0
+          fi
+          VER=$(cat VERSION)
+          git commit -m "grok-bot ${VER}"
+          git push
+
+      - name: GitHub Release
+        if: success()
+        run: |
+          VER=$(cat VERSION 2>/dev/null || echo unknown)
+          if git tag --list | grep -qx "v${VER}"; then
+            echo "Release v${VER} already exists."
+            exit 0
+          fi
+          gh release create "v${VER}" --title "Grok Bot ${VER}" \
+            --notes "Converted from official grok-bot_${VER}_amd64.deb (build $(cat BUILD_ID)). RPM Requires are translated from the Debian Depends list. Add the dnf repo per README." \
+            repo/*.rpm repo/*.repo || echo "release step skipped/failed"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

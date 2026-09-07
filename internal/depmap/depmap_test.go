@@ -4,12 +4,12 @@ import "testing"
 
 func TestMapKnown(t *testing.T) {
 	for deb, want := range map[string]string{
-		"libgtk-3-0":            "gtk3",
-		"libnss3":               "nss",
-		"libxss1":               "libXScrnSaver",
-		"libasound2t64":         "alsa-lib",
-		"libappindicator3-1":    "libappindicator-gtk3",
-		"libfoo (>= 1.2)":       "libfoo", // unknown -> raw fallback
+		"libgtk-3-0":         "gtk3",
+		"libnss3":            "nss",
+		"libxss1":            "libXScrnSaver",
+		"libasound2t64":      "alsa-lib",
+		"libappindicator3-1": "libappindicator-gtk3",
+		"libfoo (>= 1.2)":    "libfoo", // unknown -> raw fallback
 	} {
 		got, _ := Map(deb)
 		if got != want {

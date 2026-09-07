@@ -23,11 +23,11 @@ import (
 
 // Options for Generate.
 type Options struct {
-	RPMDir   string // directory containing *.rpm
-	OutDir   string // repo root (defaults to RPMDir)
-	RepoName string // human name in .repo file, default "grok-bot"
-	BaseURL  string // baseurl written into the .repo file
-	UseCreaterepo bool // use createrepo_c when available (default true)
+	RPMDir        string // directory containing *.rpm
+	OutDir        string // repo root (defaults to RPMDir)
+	RepoName      string // human name in .repo file, default "grok-bot"
+	BaseURL       string // baseurl written into the .repo file
+	UseCreaterepo bool   // use createrepo_c when available (default true)
 }
 
 // Generate builds/refreshes repodata for all *.rpm in RPMDir.
@@ -275,10 +275,10 @@ type repomdXML struct {
 	Data     []repomdData `xml:"data"`
 }
 type repomdData struct {
-	Type     string          `xml:"type,attr"`
-	Checksum repomdChecksum  `xml:"checksum"`
-	Location repomdLocation  `xml:"location"`
-	Size     int64           `xml:"size"`
+	Type     string         `xml:"type,attr"`
+	Checksum repomdChecksum `xml:"checksum"`
+	Location repomdLocation `xml:"location"`
+	Size     int64          `xml:"size"`
 }
 type repomdChecksum struct {
 	Type  string `xml:"type,attr"`

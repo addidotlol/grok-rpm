@@ -33,7 +33,7 @@ import (
 // Endpoints queried in order. Linux feeds carry the build ID; the others
 // only carry the version and are used as fallback.
 var (
-	LinuxX64Feed  = "https://api2.cursor.sh/updates/api/update/linux-x64/sand/0.0.0/stable"
+	LinuxX64Feed   = "https://api2.cursor.sh/updates/api/update/linux-x64/sand/0.0.0/stable"
 	LinuxArm64Feed = "https://api2.cursor.sh/updates/api/update/linux-arm64/sand/0.0.0/stable"
 	// Version-only fallbacks (no build hash in their URLs).
 	DarwinArm64Feed = "https://api2.cursor.sh/updates/api/update/darwin-arm64/sand/0.0.0/stable"
@@ -45,11 +45,11 @@ var (
 
 // Release is one upstream Grok Bot release.
 type Release struct {
-	Version     string `json:"version"`
-	BuildID     string `json:"build_id"`     // 40-hex content hash
+	Version      string `json:"version"`
+	BuildID      string `json:"build_id"`      // 40-hex content hash
 	DownloadBase string `json:"download_base"` // https://downloads.cursor.com/grokbot/stable
-	DebAMD64    string `json:"deb_amd64"`
-	DebARM64    string `json:"deb_arm64"`
+	DebAMD64     string `json:"deb_amd64"`
+	DebARM64     string `json:"deb_arm64"`
 	// Raw feed URL that produced the build ID (AppImage URL).
 	SourceURL string `json:"source_url"`
 }

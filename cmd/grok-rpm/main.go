@@ -245,10 +245,14 @@ func runRepo(args []string) error {
 	outdir := fs.String("outdir", "", "repo root (default = rpmdir)")
 	name := fs.String("name", "grok-bot", "repo id/name")
 	baseurl := fs.String("baseurl", "", "baseurl for .repo file")
+	keep := fs.Int("keep", 0, "keep N newest RPMs per arch before generating (0 = keep all)")
 	fs.Parse(args)
 	out := *outdir
 	if out == "" {
 		out = *rpmdir
+	}
+	if *keep > 0 {
+		pruneOld(*rpmdir, *keep)
 	}
 	return repo.Generate(repo.Options{RPMDir: *rpmdir, OutDir: out, RepoName: *name, BaseURL: *baseurl})
 }
@@ -302,6 +306,7 @@ func runSync(args []string) error {
 	os.MkdirAll(*repoDir, 0o755)
 
 	built := 0
+	var failed []string
 	for _, a := range expandArch(*arch) {
 		url := rel.DebURL(a)
 		debPath := filepath.Join(debDir, filepath.Base(url))
@@ -309,6 +314,7 @@ func runSync(args []string) error {
 		if err := downloadFile(url, debPath); err != nil {
 			// arm64 may 404 on some releases; warn and continue if amd64 ok.
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", url, err)
+			failed = append(failed, a)
 			continue
 		}
 		res, err := rpmbuild.Convert(rpmbuild.Options{
@@ -316,7 +322,11 @@ func runSync(args []string) error {
 			WorkDir: filepath.Join(*workdir, "convert-"+a), Release: *release,
 		})
 		if err != nil {
-			return fmt.Errorf("convert %s: %w", a, err)
+			// Don't lose the arches that did build (e.g. arm64
+			// cross-build on an x86_64 runner); warn and continue.
+			fmt.Fprintf(os.Stderr, "warning: convert %s failed: %v\n", a, err)
+			failed = append(failed, a)
+			continue
 		}
 		fmt.Fprintf(os.Stderr, "built %s\n", res.RPMPath)
 		if len(res.Unmapped) > 0 {
@@ -338,6 +348,9 @@ func runSync(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "synced %s (%s)\n", rel.Version, rel.BuildID)
+	if len(failed) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: arches skipped/failed: %s (build them on native runners; see README)\n", strings.Join(failed, ", "))
+	}
 	return nil
 }
 

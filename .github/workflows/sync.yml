@@ -3,6 +3,11 @@ name: sync
 # Automatically picks up Grok Bot updates, converts the official .deb to
 # RPM (translating the Debian dependency list), rebuilds the dnf repository,
 # and publishes the result.
+#
+# Each arch is converted on a NATIVE runner: rpmbuild cannot cross-build
+# (aarch64 RPMs on x86_64 fail with "No compatible architectures found for
+# build" because Ubuntu's rpm lacks that platform). The publish job merges
+# the per-arch RPMs, regenerates repodata, and releases.
 
 on:
   schedule:
@@ -36,12 +41,65 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
 env:
   GO_VERSION: "1.23"
 
 jobs:
-  sync:
+  check:
     runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      version: ${{ steps.decide.outputs.version }}
+      build_id: ${{ steps.decide.outputs.build_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Resolve upstream vs recorded state
+        id: decide
+        run: |
+          go run ./cmd/grok-rpm check --format json | tee /tmp/upstream.json
+          FEED_VER=$(jq -r .version /tmp/upstream.json)
+          FEED_BUILD=$(jq -r .build_id /tmp/upstream.json)
+          PIN="${{ inputs.version }}"
+          CUR_VER=$(cat VERSION 2>/dev/null || true)
+          CUR_BUILD=$(cat BUILD_ID 2>/dev/null || true)
+          if [ -n "$PIN" ] && [ "$PIN" != "$FEED_VER" ] && [ "$PIN" != "$CUR_VER" ]; then
+            echo "Pinned $PIN matches neither feed ($FEED_VER) nor recorded state ($CUR_VER); cannot resolve build hash." >&2
+            exit 1
+          fi
+          VER="${PIN:-$FEED_VER}"
+          if [ "$VER" = "$FEED_VER" ]; then BUILD="$FEED_BUILD"; else BUILD="$CUR_BUILD"; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "build_id=$BUILD" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force }}" = "true" ] || [ "$VER" != "$CUR_VER" ] || { [ -n "$BUILD" ] && [ -n "$CUR_BUILD" ] && [ "$BUILD" != "$CUR_BUILD" ]; }; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Up to date ($CUR_VER); nothing to do."
+          fi
+
+  build:
+    needs: check
+    # inputs.arch is only set on workflow_dispatch; schedule/push build both.
+    if: ${{ needs.check.outputs.build == 'true' && (inputs.arch == '' || inputs.arch == 'all' || inputs.arch == matrix.deb-arch) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deb-arch: amd64
+            runner: ubuntu-latest
+          - deb-arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,24 +113,44 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y rpm dpkg-dev
 
-      - name: Check upstream
-        id: check
+      - name: Download + convert (${{ matrix.deb-arch }})
         run: |
-          go run ./cmd/grok-rpm check --format json | tee /tmp/upstream.json
-          echo "version=$(jq -r .version /tmp/upstream.json)" >> "$GITHUB_OUTPUT"
+          go run ./cmd/grok-rpm download --arch "${{ matrix.deb-arch }}" \
+            --version "${{ needs.check.outputs.version }}" --outdir /tmp/debs
+          ls -lh /tmp/debs/
+          mkdir -p ./out
+          for deb in /tmp/debs/*.deb; do
+            go run ./cmd/grok-rpm convert --deb "$deb" --outdir ./out --workdir /tmp/grokwork
+          done
+          ls -lh ./out/
 
-      - name: Sync (download + convert + repo)
-        run: |
-          ARGS=(sync --once --arch "${{ inputs.arch || 'all' }}" --state-dir . --repo-dir ./repo --workdir /tmp/grokwork --keep 2)
-          if [ -n "${{ inputs.version }}" ]; then ARGS+=(--version "${{ inputs.version }}"); fi
-          if [ "${{ inputs.force }}" = "true" ]; then ARGS+=(--force); fi
-          # Base URL for the dnf .repo file (GitHub Pages serves ./repo).
-          # Adjust <owner>/<repo> via repository variables if you fork.
-          ARGS+=(--baseurl "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/repo/")
-          go run ./cmd/grok-rpm "${ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.deb-arch }}
+          path: ./out/*.rpm
+          if-no-files-found: error
 
-      - name: Verify repo
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rpm-*
+          merge-multiple: true
+          path: ./repo
+
+      - name: Regenerate repodata
         run: |
+          go run ./cmd/grok-rpm repo --rpmdir ./repo --keep 2 \
+            --baseurl "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/repo/"
           ls -lh repo/
           rpm -qpi repo/*.rpm | head -n 30 || true
           rpm -qpR repo/*.rpm | sort -u | head -n 40 || true
@@ -80,6 +158,8 @@ jobs:
 
       - name: Commit repo + state
         run: |
+          printf '%s\n' "${{ needs.check.outputs.version }}" > VERSION
+          printf '%s\n' "${{ needs.check.outputs.build_id }}" > BUILD_ID
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add VERSION BUILD_ID repo/ || true
@@ -87,20 +167,19 @@ jobs:
             echo "No changes (already up to date)."
             exit 0
           fi
-          VER=$(cat VERSION)
-          git commit -m "grok-bot ${VER}"
+          git commit -m "grok-bot ${{ needs.check.outputs.version }}"
           git push
 
       - name: GitHub Release
         if: success()
         run: |
-          VER=$(cat VERSION 2>/dev/null || echo unknown)
+          VER="${{ needs.check.outputs.version }}"
           if git tag --list | grep -qx "v${VER}"; then
             echo "Release v${VER} already exists."
             exit 0
           fi
           gh release create "v${VER}" --title "Grok Bot ${VER}" \
-            --notes "Converted from official grok-bot_${VER}_amd64.deb (build $(cat BUILD_ID)). RPM Requires are translated from the Debian Depends list. Add the dnf repo per README." \
+            --notes "Converted from official grok-bot_${VER} debs (build ${{ needs.check.outputs.build_id }}). RPM Requires are translated from the Debian Depends list. Add the dnf repo per README." \
             repo/*.rpm repo/*.repo || echo "release step skipped/failed"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

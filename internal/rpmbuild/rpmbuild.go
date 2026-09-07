@@ -255,17 +255,8 @@ func Convert(o Options) (Result, error) {
 	if _, err := exec.LookPath("rpmbuild"); err != nil {
 		return res, fmt.Errorf("rpmbuild not found in PATH (install rpm-build/rpm): %w", err)
 	}
-	args := []string{"-bb", "--define", "_topdir " + topdir}
-	// Cross-arch payload: the files are prebuilt, so just label the arch.
-	if arch == "aarch64" {
-		args = append(args, "--target", "aarch64")
-	}
-	args = append(args, specPath)
-	cmd := exec.Command("rpmbuild", args...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return res, fmt.Errorf("rpmbuild failed: %w", err)
+	if err := runRpmbuild(topdir, specPath, arch); err != nil {
+		return res, err
 	}
 	built, err := filepath.Glob(filepath.Join(topdir, "RPMS", "*", "*.rpm"))
 	if err != nil || len(built) == 0 {
@@ -290,6 +281,73 @@ func Convert(o Options) (Result, error) {
 		Requires: requires, Unmapped: unmapped,
 	}
 	return res, nil
+}
+
+// hostCPU reports rpm's native target CPU (e.g. x86_64), falling back to
+// uname -m when rpm is unaware of itself.
+func hostCPU() string {
+	if out, err := exec.Command("rpm", "--eval", "%{_target_cpu}").Output(); err == nil {
+		if s := strings.TrimSpace(string(out)); s != "" && !strings.Contains(s, "%{") {
+			return s
+		}
+	}
+	// Fall back to uname -m when rpm is unaware of itself.
+	if out, err := exec.Command("uname", "-m").Output(); err == nil {
+		if n := normalizeArch(string(out)); n != "" {
+			return n
+		}
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// normalizeArch maps the various amd64/arm64 spellings to rpm arch names.
+func normalizeArch(a string) string {
+	switch strings.ToLower(strings.TrimSpace(a)) {
+	case "amd64", "x86_64", "x64":
+		return "x86_64"
+	case "arm64", "aarch64":
+		return "aarch64"
+	default:
+		return ""
+	}
+}
+
+// runRpmbuild invokes rpmbuild, handling the cross-arch case. The payload
+// is prebuilt, so cross-arch means "label the arch", but rpmbuild still
+// needs a matching platform (e.g. aarch64-linux). Ubuntu's rpm ships fewer
+// platform files than Fedora's, so bare "--target aarch64" fails there with
+// "No compatible architectures found for build". Try the full triplet
+// first, then the short name. Building arm64 on a native aarch64 runner
+// (see the workflow matrix) avoids this entirely.
+func runRpmbuild(topdir, specPath, arch string) error {
+	base := []string{"-bb", "--define", "_topdir " + topdir}
+	run := func(args []string) error {
+		cmd := exec.Command("rpmbuild", args...)
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("rpmbuild failed: %w", err)
+		}
+		return nil
+	}
+	if want, host := normalizeArch(arch), normalizeArch(hostCPU()); want == "" || host == "" || want == host {
+		// Native build (or unknown arch): no --target needed.
+		return run(append(append([]string{}, base...), specPath))
+	}
+	var last error
+	for _, target := range []string{arch + "-linux", arch} {
+		args := append(append([]string{}, base...), "--target", target, specPath)
+		if err := run(args); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+	}
+	return fmt.Errorf("rpmbuild failed: cross-arch %s on %s needs a native runner (e.g. ubuntu-24.04-arm for arm64): %w",
+		arch, hostCPU(), last)
 }
 
 // fileList walks root and returns %files entries. Directories are emitted

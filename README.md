@@ -78,11 +78,12 @@ rpm -qpR repo/*.rpm
 
 ## GitHub Actions
 
-`.github/workflows/sync.yml`:
+`.github/workflows/sync.yml` runs `check` → per-arch `build` → `publish`:
 
-- **schedule** daily (`17 6 * * *`) + **workflow_dispatch** (`version`, `arch`, `force`).
-- Installs `rpm` + `dpkg-dev`, runs `sync --once`, verifies with `rpm -qpR` and `repodata/repomd.xml` presence.
-- Commits `VERSION`, `BUILD_ID`, `repo/` on change; creates GitHub Release `v<ver>` with the RPMs.
+- **schedule** daily (`17 6 * * *`) + **workflow_dispatch** (`version`, `arch`, `force`) + push on Go/workflow changes.
+- `check` resolves the upstream version/build and skips the rest when `VERSION`/`BUILD_ID` already match (unless `force`).
+- `build` is a matrix: `amd64` on `ubuntu-latest`, `arm64` on `ubuntu-24.04-arm`. **Each arch must build on a native runner** — rpmbuild cannot cross-build (`--target aarch64` on x86_64 fails with `No compatible architectures found for build` because Ubuntu's rpm lacks that platform). `sync --arch all` on one machine hits the same wall; run one arch per machine or use the matrix.
+- `publish` merges the RPM artifacts, regenerates repodata (`repo --keep 2`), commits `VERSION`, `BUILD_ID`, `repo/`, and creates GitHub Release `v<ver>` with the RPMs.
 
 Pruning: `--keep 2` retains the 2 newest RPMs per arch so git history stays bounded. Version state lives in `VERSION`/`BUILD_ID` (same convention as other Grok Bot Linux ports).
 
